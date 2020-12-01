@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+
+import rospy
+import rospkg
+import numpy as np
+import os
+from threading import Lock
+
+from std_msgs.msg import String
+from sensor_msgs.msg import LaserScan
+from geometry_msgs.msg import Point, Pose, Quaternion
+from nav_msgs.msg import OccupancyGrid, MapMetaData
+from visualization_msgs.msg import Marker, MarkerArray
+
+
+
+from geometry_msgs.msg import Twist
+
+
+MOVE_IDS = 'NWSE'
+
+MOVES = [np.array([0, 1]), # Up
+        np.array([-1, 0]), # Left
+        np.array([0, -1]),   # Down
+        np.array([1, 0])]    # Right
+
+SCAN_DIRECTIONS = [np.array([0, -1]),   # Down
+                    np.array([-1, 0]), # Left
+                    np.array([0, 1]),   # Up
+                    np.array([1, 0])]   # Right
+
+
+def numpy_to_occupancy_grid(arr, info=None):
+    if not len(arr.shape) == 2:
+        raise TypeError('Array must be 2D')
+
+    # Adjust values
+    arr = arr.astype('float64')
+    factor = 100/np.max(arr)
+    arr[arr > 0] *= factor
+
+    arr = np.array(np.transpose(arr), dtype=np.int8)
+
+    grid = OccupancyGrid()
+    if isinstance(arr, np.ma.MaskedArray):
+        # We assume that the masked value are already -1, for speed
+        arr = arr.data
+    grid.data = arr.ravel()
+    grid.info = info or MapMetaData()
+    grid.info.height = arr.shape[0]
+    grid.info.width = arr.shape[1]
+
+    return grid
+
+def create_marker():
+
+    marker = Marker()
+    marker.header.frame_id = "map"
+    marker.ns = "navigation"
+    marker.id = 0
+    marker.type = Marker.CUBE
+    marker.action = Marker.ADD
+    marker.scale.x = 1
+    marker.scale.y = 1
+    marker.scale.z = 0.2
+    marker.color.a = 1.0
+    marker.color.r = 0.0
+    marker.color.g = 1.0
+    marker.color.b = 0.0
+    marker.pose.orientation = Quaternion(0, 0, 0, 1)
+    return marker
+
+
+class LocalizationNode:
+    """
+    A node, capsuling the functionality from the simple robot simulator.
+    """
+
+    def __init__(self, num_sensors: int = 4):
+        """
+        Initializes a SimpleSimNode instance, including initialization of the sim node itself and all
+        Publishers/Subscribers.
+
+        @param num_sensors: The number of sensors used for the simulation (4/8).
+        """
+        # Initialize member variables
+        self.belief_array = None
+        self.map = None
+        self.prior = None
+        self.scan_index = 0
+        self.prior_index = 0
+        self.robot_marker = create_marker()
+
+        self.last_scan_ranges = None
+        move_prob = rospy.get_param('~robot_move_probabilities', [0.9, 0.04, 0.04, 0.0, 0.02])
+        self.prob_of_staying = move_prob[4]
+        self.probability_of_moving = [move_prob[0] , move_prob[1], move_prob[3], move_prob[2]] # anticlockwise  0, +90, +180, +270 from move command
+        # Initialize Publishers
+        self.pub_vis_marker = rospy.Publisher('/visualization/robot_pos', Marker, queue_size=10)
+        self.pub_grid = rospy.Publisher('visualization/robot_pos_array', MarkerArray, queue_size=10)
+        self.pub_robot_pos = rospy.Publisher('/robot_pos', Point, queue_size=10)
+
+        # Initialize Subscribers
+        self.move_command = rospy.Subscriber('/move', String, self.read_move_command)
+        self.sensor_data = rospy.Subscriber('/scan', LaserScan, self.read_scan)
+        self.map_sub = rospy.Subscriber('/map', OccupancyGrid, self.get_map)
+        self.is_map_init = False
+
+
+    def read_move_command(self, command):
+        self.update_map_from_move(command.data)
+
+
+    def build_marker_array(self, posterior, robot_pos):
+        markerArray = MarkerArray()
+        for idx, idy in np.ndindex(np.shape(posterior)):
+            if not(idx == robot_pos[0] and idy == robot_pos[1]):
+                marker = create_marker()
+                marker.color.a = posterior[idx, idy] * 100
+                marker.color.b = 1.0
+                #marker.lifetime = rospy.Duration.from_sec(1)
+                marker.id = idx + idy * 100 + 10
+                marker.pose.position.x = idx + 0.5
+                marker.pose.position.y = idy + 0.5
+                markerArray.markers.append(marker)
+        return markerArray
+
+
+
+    def read_scan(self, scan):
+        if self.prior_index > self.scan_index:
+            self.last_scan_ranges = scan.ranges
+            scan_map = self.get_scan_likehood_map(scan.ranges)
+            posterior = np.multiply(scan_map, self.prior)
+            sum = np.sum(posterior)
+            if sum == 0:
+                posterior = scan_map
+                sum = np.sum(posterior)
+            posterior /= sum if sum != 0 else 1
+            max_value = np.unravel_index(posterior.argmax(), posterior.shape)
+            self.pub_robot_pos.publish(Point(max_value[0], max_value[1], 0))
+            robot_marker = create_marker()
+            robot_marker.pose.position.x = max_value[0]+0.5
+            robot_marker.pose.position.y = max_value[1]+0.5
+            markerArray = self.build_marker_array(posterior, max_value)
+            self.pub_vis_marker.publish(robot_marker)
+            self.pub_grid.publish(markerArray)
+            #self.pub_grid.publish(numpy_to_occupancy_grid(posterior))
+            self.scan_index += 1
+            self.prior=posterior
+
+    def convert_to_belief(map_tile_type, belief_per_square):
+        if map_tile_type == 0:
+            return belief_per_square
+        return 0
+
+    def init_prior(self, map):
+        valid_spots = np.sum(map == 0)
+        shape = np.shape(map)
+        new_map = np.zeros(np.shape(map))
+        belief_per_square = 1.0 / valid_spots
+        for idxy, y in enumerate(map):
+            for idxx, x in enumerate(y):
+                new_map[idxy,  idxx] = belief_per_square if map[idxy,idxx] == 0 else 0
+        return new_map
+
+    def get_map(self, msg):
+        if self.is_map_init:
+            return
+        self.mapWidth = msg.info.width
+        self.mapHeight = msg.info.height
+        self.map = np.transpose(np.asarray(msg.data, dtype=np.int8).reshape(msg.info.width, msg.info.height))
+        self.prior = self.init_prior(self.map)
+        self.is_map_init = True
+        self.prior_index = 1
+
+    def is_out_of_bounds(self, y,  x):
+        if x < 0 or y < 0:
+            return True
+        if x > (self.mapWidth -1) or y > (self.mapHeight -1):
+            return True
+        return False
+
+    def get_tile_belief(self, y, x):
+        if self.is_out_of_bounds(y,  x) or self.is_wall(y, x):
+            return 0
+        return self.prior[x, y]
+
+    def get_movement_probability(self, move_direction, move_command):
+        """
+            # move directions 0, 1, 2, 3,
+            # move command N, W, S, E -> 0, 1, 2, 3
+            probablility_array -> [0, +90, +180, +270]
+            where positive degree denotes anti clockwise movement
+            prob of moving north:
+            given command of command is N : 0
+            command is W : -1
+            command is S : -2
+            command is E : -3
+
+        """
+        return self.probability_of_moving[move_direction - MOVE_IDS.find(move_command)]
+
+
+
+    def add_to_estimate(self, move_delta, move_direction, move_command, y, x):
+        origin_x = x - move_delta[0]
+        origin_y = y - move_delta[1]
+        tile_belief = self.get_tile_belief(origin_y, origin_x)
+
+        if self.is_invalid_robot_position(origin_y,  origin_x):
+            return 0
+        movement_probability = self.get_movement_probability(move_direction, move_command)
+
+        return tile_belief * movement_probability
+
+    def get_index_belief(self, y, x, move_command):
+        if self.is_out_of_bounds(y, x) or self.is_wall(y, x):
+            return 0
+        estimate = self.prob_of_staying * self.prior[x, y]
+        for move_direction, move_delta in enumerate(MOVES):
+            estimate += self.add_to_estimate(move_delta, move_direction, move_command, y, x)
+        return estimate
+
+
+    def update_map_from_move(self, move_command):
+        updated_prior = np.zeros(np.shape(self.prior))
+        for idx, idy in np.ndindex(np.shape(updated_prior)):
+            updated_prior[idx, idy] = self.get_index_belief(idy, idx, move_command)
+        self.prior = updated_prior
+        self.prior_index += 1
+
+    def sensor_was_close(self, map_offset, y, x, scan_direction):
+        if scan_direction % 2 == 0:
+            return self.is_wall_scan(map_offset[1] + y + 1, x) or self.is_wall_scan(map_offset[1] + y - 1, x)
+        else:
+            return self.is_wall_scan(y, map_offset[0] + x + 1) or self.is_wall_scan(y, map_offset[0] + x - 1)
+
+    def is_unknown_area(self, y, x):
+        return self.map[int(x), int(y)] == -1
+
+    def is_invalid_robot_position(self, y, x):
+        return self.is_out_of_bounds(y,x) or self.is_wall(y, x) or self.is_unknown_area(y, x)
+
+    def is_wall(self, y, x):
+        return self.map[int(x), int(y)] == 100
+
+    def is_wall_scan(self, y, x):
+        #if self.is_out_of_bounds(y, x):
+        #    return 0
+        return self.is_out_of_bounds(y, x) or self.map[int(x), int(y)] == 100
+
+
+    def get_singe_scan_likelihood(self, y, x, scan_direction, scan_value):
+        """
+        SCAN_DIRECTIONS = [np.array([0, -1]),   # Down
+                            np.array([-1, 0]), # Left
+                            np.array([0, 1]),   # Up
+                            np.array([1, 0])]   # Right
+        map_offset is [delta_x, delta_y] from the robot
+
+        """
+        map_offset = scan_value*SCAN_DIRECTIONS[scan_direction]
+        if self.is_wall_scan(map_offset[1] + y, map_offset[0] + x):
+            return 0.8
+            return 0.1
+        return 0
+
+    def get_sense_likelihood(self, y, x, scan_ranges):
+        likelihood = 1.0;
+        for scan_direction, scan_value in enumerate(scan_ranges):
+            likelihood *= self.get_singe_scan_likelihood(y, x, scan_direction, scan_value)
+        return likelihood
+
+    def get_scan_likehood_map(self, scan_ranges):
+        scan_likelihood_map = np.zeros(np.shape(self.map))
+        for idx, idy in  np.ndindex(np.shape(self.map)):
+            val = 0 if self.is_invalid_robot_position(idy, idx) else self.get_sense_likelihood(idy, idx, scan_ranges)
+            scan_likelihood_map[idx, idy] = val
+
+        return scan_likelihood_map
+
+
+    def run(self):
+        """
+
+        """
+        while not rospy.is_shutdown():
+          pass
+
+
+if __name__ == "__main__":
+    rospy.init_node('localization_node')
+
+    localization_node = LocalizationNode()
+    localization_node.run()
