@@ -39,16 +39,17 @@ SCAN_DIRECTIONS = [np.array([0, -1]),   # Down
                     np.array([0, 1]),   # Up
                     np.array([1, 0])]   # Right 
 Together, they enabled me to implement the probabilities algorithmically, in such a way that it could be extended for greater granularity, or a wider span of scan and movement possiblities. 
-I published and subscribed to the following topics. 
-        # Publishers
-        ('/visualization/robot_pos', Marker,)
-        ('visualization/robot_pos_array', MarkerArray)
-        ('/robot_pos', Point)
+I subscribed and published to the following topics. 
+
 
         # Initialize Subscribers
         ('/move', String,)
         ('/scan', LaserScan
         ('/map', OccupancyGrid)
+        # Initialize Publishers
+        ('/visualization/robot_pos', Marker,)
+        ('visualization/robot_pos_array', MarkerArray)
+        ('/robot_pos', Point)
 Remarks:
 I found that the accuracy of the scanner alone was enough to entirely achieve the goal. Therefor, as the move certainty was reduced, I also downweighted the effect of the prior. This approach is typically adoped as a kalman filter, but I simply multiplied the prior by the probability of "correct" motion, ie, 0.7
 
