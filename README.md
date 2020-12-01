@@ -29,15 +29,21 @@ I parsed the move uncertainty into another array [0, +90, +180, +270]
 where 0 implies a desired move command and the actual command coicide
 and +90 implies an attempted move forward, might instead move 90 degrees anti clockwise
 I included the following arrays to assist in navigating movements and indices:
+
 MOVE_IDS = 'NWSE'
-MOVES = [np.array([0, 1]), # Up
-        np.array([-1, 0]), # Left
-        np.array([0, -1]),   # Down
-        np.array([1, 0])]    # Right
-SCAN_DIRECTIONS = [np.array([0, -1]),   # Down
-                    np.array([-1, 0]), # Left
-                    np.array([0, 1]),   # Up
-                    np.array([1, 0])]   # Right 
+\
+MOVES = [np.array([0, 1]), # Up \
+        np.array([-1, 0]), # Left \
+        np.array([0, -1]),   # Down \
+        np.array([1, 0])]    # Right \
+\
+
+SCAN_DIRECTIONS = [np.array([0, -1]),   # Down \
+                    np.array([-1, 0]), # Left \
+                    np.array([0, 1]),   # Up \
+                    np.array([1, 0])]   # Right \ 
+Which correspond to the sequence from the scan array.
+
 Together, they enabled me to implement the probabilities algorithmically, in such a way that it could be extended for greater granularity, or a wider span of scan and movement possiblities. 
 I subscribed and published to the following topics. 
 
