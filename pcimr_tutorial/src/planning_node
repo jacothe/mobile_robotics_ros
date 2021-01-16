@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+
+import rospy
+import rospkg
+import numpy as np
+import os
+from threading import Lock
+
+from std_msgs.msg import String
+from sensor_msgs.msg import LaserScan
+from geometry_msgs.msg import Point, Pose, Quaternion, PoseStamped
+from nav_msgs.msg import OccupancyGrid, MapMetaData, Path
+from visualization_msgs.msg import Marker
+
+
+class PlanningNode:
+    """
+    A node which implements the A* graph search for finding a route in a discretized 2d grid.
+    """
+
+    def __init__(self, num_sensors: int = 4):
+        """
+        Initializes a SimpleSimNode instance, including initialization of the sim node itself and all
+        Publishers/Subscribers.
+
+        """
+        # Initialize member variables
+        self.sim_lock = Lock()
+        # get an instance of RosPack with the default search paths
+
+        # Initialize Publishers
+        self.pub_path = rospy.Publisher('/global_path', Path, queue_size=10)
+        self.pub_robot_path = rospy.Publisher('/visualization/path', Marker, queue_size=10)
+        self.pub_robot_pos_marker = rospy.Publisher('/visualization/robot_pos', Marker, queue_size=10)
+
+        # Initialize Subscribers
+        self.robot_pos = rospy.Subscriber('/robot_pos', Point, self.receive_robot_pos)
+        self.robot_map = rospy.Subscriber('/map', OccupancyGrid, self.receive_map)
+        self.robot_goal = rospy.Subscriber('move_base_simple/goal', PoseStamped, self.receive_goal)
+
+
+        # Initialize Services
+        # Setup messages for publishing
+        self.msg_robot_position = Point()
+        self.msg_robot_position.z = 0
+
+        self.msg_pos_marker = Marker()
+        self.msg_pos_marker.header.frame_id = "map"
+        self.msg_pos_marker.ns = "robot_pos"
+        self.msg_pos_marker.id = 0
+        self.msg_pos_marker.type = Marker.CUBE
+        self.msg_pos_marker.action = Marker.ADD
+        self.msg_pos_marker.scale.x = 1
+        self.msg_pos_marker.scale.y = 1
+        self.msg_pos_marker.scale.z = 0.2
+        self.msg_pos_marker.color.a = 1.0
+        self.msg_pos_marker.color.r = 0.0
+        self.msg_pos_marker.color.g = 1.0
+        self.msg_pos_marker.color.b = 0.0
+        self.msg_pos_marker.pose.orientation = Quaternion(0, 0, 0, 1)
+
+    def receive_goal(self, goal):
+        print('goal!')
+
+    def receive_map(self, map):
+        print('received map!')
+
+    def receive_robot_pos(self, pos):
+        """
+        """
+        self.sim_lock.acquire()
+        print('receiving pos!', pos)
+        self.sim_lock.release()
+
+    def run(self, rate: float = 1):
+        """
+
+        """
+        while not rospy.is_shutdown():
+            pass
+
+
+if __name__ == "__main__":
+    rospy.init_node('planning_node')
+
+    simple_sim_node = PlanningNode()
+    simple_sim_node.run()
