@@ -1,24 +1,18 @@
 #!/usr/bin/env python3
 
 import rospy
-import rospkg
 import numpy as np
 import os
 from threading import Lock
 from random import randrange
 
 from std_msgs.msg import String
-from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import Point, Pose, Quaternion, PoseStamped
-from nav_msgs.msg import OccupancyGrid, MapMetaData, Path
+from geometry_msgs.msg import Point, Quaternion
+from nav_msgs.msg import OccupancyGrid, Path
 from visualization_msgs.msg import Marker
+from graph_node import Graph_Node
+from node_outputs import create_line_strip, create_marker, build_path_message
 
-MOVE_IDS = 'NWSE'
-
-MOVES = [np.array([0, 1]), # Up
-        np.array([-1, 0]), # Left
-        np.array([0, -1]),   # Down
-        np.array([1, 0])]    # Right
 
 def target_invalid(target, map):
     return target is None or map[target[0], target[1]] != 0
@@ -26,48 +20,26 @@ def target_invalid(target, map):
 def set_random_target(shape):
     return (randrange(shape[0]), randrange(shape[1]))
 
-def build_target(map):
-    target = None
-    shape = np.shape(map)
-    while target_invalid(target, map):
-        target = set_random_target(shape)
-    return target
-
-def get_cost(location, target):
-    return abs(location[0] - target[0]) + abs(location[1] - target[1])
 
 def is_valid_location(map, location):
-    print('location', location)
     return map[location[0], location[1]] == 0
 
-class Graph_Node:
-    graph_nodes_count = 0
-    def __init__(self, location, target):
-        self.x = location[0]
-        self.y = location[1]
-        self.location = location
-        Graph_Node.graph_nodes_count += 1
-        self.id = Graph_Node.graph_nodes_count
-        self.cost = get_cost(location, target)
-
-    def __repr__(self):
-        return "( " +  str(self.x) + ", " +  str(self.y) + ", " + str(self.cost) + ")"
-
-    def __str__(self):
-        return "( " +  str(self.x) + ", " +  str(self.y) + ", " + str(self.cost) + ")"
 
 def expand_node(node, map, target):
-    movements = ['N', 'S', 'E', 'W']
+    MOVE_IDS = 'NWSE'
+    MOVES = [np.array([0, 1]), # Up
+            np.array([-1, 0]), # Left
+            np.array([0, -1]),   # Down
+            np.array([1, 0])]    # Right
     new_nodes = []
     for index, moves in enumerate(MOVE_IDS):
         new_location = (node.x + MOVES[index][0], node.y + MOVES[index][1])
         if is_valid_location(map, new_location):
-            print('theres a valid location')
             new_nodes.append(Graph_Node(new_location, target))
 
     return new_nodes
 
-def get_closest_nodes(node_array):
+def get_closest_node(node_array):
     lowest_cost = 1000
     nodes = []
     for node in node_array:
@@ -75,7 +47,7 @@ def get_closest_nodes(node_array):
             lowest_cost = node.cost
     for node in node_array:
         if node.cost == lowest_cost:
-            nodes.append(node)
+            return node
     return nodes
 
 def pop_node_from_frontier(node_to_pop, frontier):
@@ -98,7 +70,7 @@ def build_path_from_nodes(robot_pos, target_node, explored_nodes, map):
     current_node = target_node
     starting_node = Graph_Node(robot_pos, target_node.location)
     node_path = [target_node]
-    while current_node.x != starting_node.x or current_node.y != starting_node.y:
+    while current_node != starting_node:
         current_node = find_adjacent_node(explored_nodes, current_node)
         node_path.insert(0, current_node)
 
@@ -109,7 +81,7 @@ def remove_explored_nodes(explored_nodes, new_nodes):
     for node in new_nodes:
         explored = False
         for explored_node in explored_nodes:
-            if explored_node.x == node.x and explored_node.y == node.y:
+            if explored_node == node:
                 explored = True
         if not explored:
             unexplored_nodes.append(node)
@@ -124,58 +96,17 @@ def build_path(robot_pos, map, target):
     explored_nodes = []
     target_node = None
     while not target_found:
-        closest_nodes = get_closest_nodes(frontier)
-        frontier = pop_node_from_frontier(closest_node[0], frontier)
-        new_nodes = expand_node(closest_nodes[0], map, target)
-        explored_nodes.append(closest_node[0])
-        closest_nodes.pop(0)
-        new_and_closest = new_nodes.extend(closest_nodes)
-        unexplored_nodes = remove_explored_nodes(explored_nodes, new_and_closest)
+        closest_node = get_closest_node(frontier)
+        frontier = pop_node_from_frontier(closest_node, frontier)
+        new_nodes = expand_node(closest_node, map, target)
+        explored_nodes.append(closest_node)
+        unexplored_nodes = remove_explored_nodes(explored_nodes, new_nodes)
         frontier.extend(unexplored_nodes)
-        frontier.extend(closest_nodes)
         target_node = nodes_contain_target(new_nodes, target)
         if target_node is not None:
             target_found = True
 
     return build_path_from_nodes(robot_pos, target_node, explored_nodes, map)
-
-def create_line_strip(nodes_path):
-    marker = Marker()
-    marker.header.frame_id = "map"
-    marker.ns = "navigation"
-    marker.id = 0
-    marker.type = Marker.LINE_STRIP
-    marker.action = Marker.ADD
-    marker.scale.x = 0.3
-    marker.color.a = 1.0
-    marker.color.r = 0.0
-    marker.color.g = 1.0
-    marker.color.b = 0.0
-    marker.pose.orientation = Quaternion(0, 0, 0, 1)
-    marker.points.clear()
-    for node in nodes_path:
-        print('pooint', Point(node.x + 0.5, node.y+ 0.5, 0))
-        marker.points.append(Point(node.x + 0.5, node.y+ 0.5, 0.0))
-    return marker
-
-def create_marker(coord):
-    marker = Marker()
-    marker.header.frame_id = "map"
-    marker.ns = "navigation"
-    marker.id = 0
-    marker.type = Marker.CUBE
-    marker.action = Marker.ADD
-    marker.scale.x = 1
-    marker.scale.y = 1
-    marker.scale.z = 0.2
-    marker.color.a = 1.0
-    marker.color.r = 1.0
-    marker.color.g = 0.0
-    marker.color.b = 0.0
-    marker.pose.orientation = Quaternion(0, 0, 0, 1)
-    marker.pose.position.x = coord[0] + 0.5
-    marker.pose.position.y = coord[1] + 0.5
-    return marker
 
 class PlanningNode:
     """
@@ -184,8 +115,6 @@ class PlanningNode:
 
     def __init__(self, num_sensors: int = 4):
         """
-        Initializes a SimpleSimNode instance, including initialization of the sim node itself and all
-        Publishers/Subscribers.
 
         """
         # Initialize member variables
@@ -195,28 +124,29 @@ class PlanningNode:
         # Initialize Publishers
         self.pub_path = rospy.Publisher('/global_path', Path, queue_size=10)
         self.pub_robot_path = rospy.Publisher('/visualization/plan', Marker, queue_size=10)
-        self.pub_robot_pos_marker = rospy.Publisher('/visualization/robot_pos', Marker, queue_size=10)
+        self.pub_goal_marker = rospy.Publisher('/visualization/robot_pos', Marker, queue_size=10)
 
         # Initialize Subscribers
         self.robot_pos = rospy.Subscriber('/robot_pos', Point, self.receive_robot_pos)
         self.robot_map = rospy.Subscriber('/map', OccupancyGrid, self.receive_map)
-        self.robot_goal = rospy.Subscriber('move_base_simple/goal', PoseStamped, self.receive_goal)
 
         self.target_goal = None
 
         self.map = None;
         self.mapInit = False
 
-        # Initialize Services
-        # Setup messages for publishing
-        self.msg_robot_position = Point()
-        self.msg_robot_position.z = 0
 
         self.robot_pos = None
         self.path_built = False
 
-    def receive_goal(self, goal):
-        print('goal!')
+    def build_target(self):
+        target = None
+        shape = np.shape(self.map)
+        while target_invalid(target, self.map):
+            target = set_random_target(shape)
+        marker = create_marker(target)
+        self.pub_goal_marker.publish(marker)
+        self.target_goal = target
 
     def receive_map(self, msg):
         if not self.mapInit:
@@ -224,26 +154,27 @@ class PlanningNode:
             self.mapWidth = msg.info.width
             self.mapHeight = msg.info.height
             self.map = np.transpose(np.asarray(msg.data, dtype=np.int8).reshape(msg.info.width, msg.info.height))
-            target = build_target(self.map)
-            marker = create_marker(target)
-            self.pub_robot_pos_marker.publish(marker)
-            self.target_goal = target
+            self.build_target()
 
     def receive_robot_pos(self, pos):
         """
         """
         self.sim_lock.acquire()
         self.robot_pos = (int(pos.x), int(pos.y))
+        if self.target_goal and pos.x == self.target_goal[0] and pos.y == self.target_goal[1]:
+            self.build_target()
+            self.path_built = False
         if self.mapInit and self.target_goal and not self.path_built:
             path = build_path(self.robot_pos, self.map, self.target_goal)
             linestrip = create_line_strip(path)
             self.pub_robot_path.publish(linestrip)
             self.path_built = True
+            path_msg = build_path_message(path)
+            self.pub_path.publish(path_msg)
         self.sim_lock.release()
 
     def run(self, rate: float = 1):
         """
-
         """
         while not rospy.is_shutdown():
             pass
