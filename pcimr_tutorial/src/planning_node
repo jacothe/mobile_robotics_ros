@@ -15,17 +15,22 @@ from node_outputs import create_line_strip, create_marker, build_path_message
 
 
 def target_invalid(target, map):
+    """
+    Ensures that the target is both a) initialized and b) in a reachable place.
+    """
     return target is None or map[target[0], target[1]] != 0
 
-def set_random_target(shape):
-    return (randrange(shape[0]), randrange(shape[1]))
-
-
 def is_valid_location(map, location):
+    """
+    Ensures that the location is reachable by the robot.
+    """
     return map[location[0], location[1]] == 0
 
 
 def expand_node(node, map, target):
+    """
+    Generate new nodes based on possible robot movement from the stipulated node.
+    """
     MOVE_IDS = 'NWSE'
     MOVES = [np.array([0, 1]), # Up
             np.array([-1, 0]), # Left
@@ -40,20 +45,27 @@ def expand_node(node, map, target):
     return new_nodes
 
 def get_closest_node(node_array):
+    """
+    Find the next node that is to be explored
+    """
+    best_node = None
     lowest_cost = 1000
-    nodes = []
     for node in node_array:
         if node.cost < lowest_cost:
             lowest_cost = node.cost
-    for node in node_array:
-        if node.cost == lowest_cost:
-            return node
-    return nodes
+            best_node = node
+    return best_node
 
 def pop_node_from_frontier(node_to_pop, frontier):
+    """
+    Once a node is explored, it should be removed from the frontier
+    """
     return [node for node in frontier if node.id != node_to_pop.id]
 
 def nodes_contain_target(nodes, target):
+    """
+    Evaluate whether a list of nodes include the target position (tuple)
+    """
     for node in nodes:
         if node.x == target[0] and node.y == target[1]:
             return node
@@ -61,12 +73,19 @@ def nodes_contain_target(nodes, target):
 
 
 def find_adjacent_node(nodes, target_node):
+    """
+    Find a node that is geometrically adjacent to a target node from a list of nodes
+    """
     candidates = []
     for node in nodes:
         if (abs(node.x - target_node.x) + abs(node.y - target_node.y)) == 1:
             return node
 
 def build_path_from_nodes(robot_pos, target_node, explored_nodes, map):
+    """
+    Takes a list of explored Graph_Nodes and returns a list
+    of Graph_Nodes which indicates a path from the robot_pos to the target_node location
+    """
     current_node = target_node
     starting_node = Graph_Node(robot_pos, target_node.location)
     node_path = [target_node]
@@ -77,6 +96,9 @@ def build_path_from_nodes(robot_pos, target_node, explored_nodes, map):
     return node_path
 
 def remove_explored_nodes(explored_nodes, new_nodes):
+    """
+    Ensures that the frontier doesn't contain nodes that have already been explored
+    """
     unexplored_nodes = []
     for node in new_nodes:
         explored = False
@@ -90,6 +112,10 @@ def remove_explored_nodes(explored_nodes, new_nodes):
 
 
 def build_path(robot_pos, map, target):
+    """
+    Constructs a list of adjacent, and transversable Graph_Nodes
+    which form a path from the robot_position to the target
+    """
     first_node = Graph_Node(robot_pos, target)
     target_found = None
     frontier = [first_node]
@@ -114,9 +140,6 @@ class PlanningNode:
     """
 
     def __init__(self, num_sensors: int = 4):
-        """
-
-        """
         # Initialize member variables
         self.sim_lock = Lock()
         # get an instance of RosPack with the default search paths
@@ -143,7 +166,7 @@ class PlanningNode:
         target = None
         shape = np.shape(self.map)
         while target_invalid(target, self.map):
-            target = set_random_target(shape)
+            target = (randrange(shape[0]), randrange(shape[1]))
         marker = create_marker(target)
         self.pub_goal_marker.publish(marker)
         self.target_goal = target
