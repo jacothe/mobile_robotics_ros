@@ -4,7 +4,7 @@
 
 ### Introduction
 
-The purpose of this tutorial demonstrates an understanding of search algorithms
+This tutorial demonstrates an understanding of search algorithms
 It considers the implementation of the A* algorithm in 2D space.
 
 
